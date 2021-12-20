@@ -2,8 +2,14 @@
 use warnings;
 use strict;
 
+# .NAME
+#     grin - greppable JSON or YAML output
+# .SEE ALSO
+#     gron - https://github.com/tomnomnom/gron
+
 use Getopt::Long;
-use JSON;
+use JSON::XS;
+use YAML::XS;
 
 our $recurse;
 our $brackets;
@@ -14,17 +20,26 @@ Getopt::Long::GetOptions(
     'b|brackets' => \$brackets,
 ) or die(":-(\n");
 
-my $json = JSON->new();
+my $json = JSON::XS->new();
+my $exit = 0;
 
 local $/ = undef;
 while (<>) {
     my $o = eval { $json->decode($_); };
-    if ($@) {
-        warn($@);
+    if (!$@) {
+        grin($o);
         next;
     }
-    grin($o);
+    $o = eval { YAML::XS::Load($_); };
+    if (!$@) {
+        grin($o);
+        next;
+    }
+    warn(sprintf("%s: input is neither JSON nor YAML\n"));
+    $exit = 1;
 }
+
+exit($exit);
 
 sub grin {
     my ($o, $lvalue) = @_;
