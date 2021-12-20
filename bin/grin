@@ -1,0 +1,71 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+
+use Getopt::Long;
+use JSON;
+
+our $recurse;
+our $brackets;
+
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    'r|recurse' => \$recurse,
+    'b|brackets' => \$brackets,
+) or die(":-(\n");
+
+my $json = JSON->new();
+
+local $/ = undef;
+while (<>) {
+    my $o = eval { $json->decode($_); };
+    if ($@) {
+        warn($@);
+        next;
+    }
+    grin($o);
+}
+
+sub grin {
+    my ($o, $lvalue) = @_;
+    $lvalue //= 'json';
+    if (ref $o eq 'ARRAY') {
+        for (my $i = 0; $i < scalar @$o; $i += 1) {
+            grin($o->[$i], $lvalue . '[' . $i . ']');
+        }
+        return;
+    }
+    if (ref $o eq 'HASH') {
+        my @keys = sort keys %$o;
+        foreach my $key (@keys) {
+            grin($o->{$key}, $lvalue . suffix($key));
+        }
+        return;
+    }
+    if ($recurse && defined $o && looksLikeJson($o)) {
+        my $oo = eval { $json->decode($o); };
+        if ($oo && !$@) {
+            grin($oo, $lvalue);
+            return;
+        }
+    }
+    printf("%s = %s;\n", $lvalue, $json->encode($o));
+}
+
+sub isIdentifier {
+    my ($s) = @_;
+    return $s =~ m{^[_\$A-Za-z][_\$A-Za-z0-9]*$};
+}
+
+sub suffix {
+    my ($key) = @_;
+    return '.' . $key if !$brackets && isIdentifier($key);
+    return '[' . $json->encode($key) . ']';
+}
+
+sub looksLikeJson {
+    my ($string) = @_;
+    return 1 if substr($string, 0, 1) eq '[' && substr($string, -1, 1) eq ']';
+    return 1 if substr($string, 0, 1) eq '{' && substr($string, -1, 1) eq '}';
+    return;
+}
