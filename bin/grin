@@ -15,9 +15,11 @@ use List::Util qw(max sum);
 our $recurse;
 our $brackets;
 our $align;
+our $noNumeric;
 
 Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
 Getopt::Long::GetOptions(
+    'n|no-numeric' => \$noNumeric,
     'r|recurse'  => \$recurse,
     'b|brackets' => \$brackets,
     'a|align:f'  => \$align,
@@ -58,7 +60,7 @@ sub grin {
     $lvalue //= 'json';
     if (ref $o eq 'ARRAY') {
         for (my $i = 0; $i < scalar @$o; $i += 1) {
-            grin($o->[$i], $lvalue . '[' . $i . ']', $sub);
+            grin($o->[$i], $lvalue . '[' . ($noNumeric ? '' : $i) . ']', $sub);
         }
         return;
     }
