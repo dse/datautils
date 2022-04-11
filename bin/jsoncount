@@ -1,0 +1,79 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use open OUT => ':locale';
+
+use JSON;
+use Data::Dumper;
+use Scalar::Util 'looks_like_number';
+
+my $json = JSON->new()->pretty(1)->canonical(1)->ascii(1);
+
+$/ = undef;
+while (<>) {
+    # seen in some JSON output by `mongoexport --jsonArray`.
+    s{":\+Infinity\b}{":"<<<+Infinity>>>"}g;
+    s{":\-Infinity\b}{":"<<<-Infinity>>>"}g;
+
+    warn("parsing ...\n");
+    my $object = $json->decode($_);
+    warn("counting ...\n");
+    my $counts = counts($object);
+    warn("toptenning ...\n");
+    my $topten = topten($counts);
+    print($json->encode($topten));
+}
+
+sub counts {
+    my ($object, $counts) = @_;
+    $counts //= {};
+    if (JSON::is_bool($object)) {
+        if ($object) {
+            $counts->{1} += 1;
+        } else {
+            $counts->{0} += 1;
+        }
+    } elsif (ref $object eq '') {
+        $counts->{$object} += 1;
+    } elsif (ref $object eq 'ARRAY') {
+        foreach my $o (@$object) {
+            counts($o, $counts);
+        }
+    } elsif (ref $object eq 'HASH') {
+        foreach my $k (keys %$object) {
+            $counts->{$k} //= {};
+            counts($object->{$k}, $counts->{$k});
+        }
+    }
+    return $counts;
+}
+
+sub topten {
+    my ($counts, $topten) = @_;
+    $topten //= {};
+    if (ref $counts eq '') {
+    }
+    if (ref $counts eq 'ARRAY') {
+        foreach my $c (@$counts) {
+            topten($c, $topten);
+        }
+    }
+    if (ref $counts eq 'HASH') {
+        my @keys = grep {
+            ref $counts->{$_} eq '' && looks_like_number($counts->{$_})
+        } keys %$counts;
+        my @counts = map {
+            [ $_, $counts->{$_} ]
+        } @keys;
+        splice(@counts, 10);
+        $topten->{TOPTEN} = [@counts] if scalar @counts;
+        foreach my $key (@keys) {
+            delete $counts->{$key};
+        }
+        foreach my $k (grep { $_ ne 'TOPTEN' } keys %$counts) {
+            $topten->{$k} //= {};
+            topten($counts->{$k}, $topten->{$k});
+        }
+    }
+    return $topten;
+}
