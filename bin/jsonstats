@@ -1,8 +1,11 @@
 #!/usr/bin/env perl
 use warnings;
 use strict;
+use feature qw(state);
 use File::Basename qw(basename);
 our $PROGNAME = basename($0);
+
+use IO::Handle;
 
 use open OUT => qw(:locale);
 
@@ -65,66 +68,59 @@ while (<>) {
     if ($isMultiple) {
         print("${GREEN}>>> ${ARGV} <<<${RESET}\n");
     }
-    # print(Dumper($values));
 
+    warn("$PROGNAME: collecting statistics for $ARGV ...\n");
     my $stats = collectStats($values);
     cleanup($stats);
-    print(Dumper($stats));
-
-    # printStats($stats);
-
-    # my $chopFraction = (1 - 95 / 100) / 2;
-    # foreach my $field (sort keys %values) {
-    #     my $values = $values{$field};
-    #     next if scalar @$values < 10;
-    #     print("$field\n");
-    #     printStats($values);
-    #     my $chopCount = round(scalar @$values * $chopFraction);
-    #     if ($chopCount < 5) {
-    #         next;
-    #     }
-    #     printf("    (95%%)\n");
-    #     my @values95 = @$values;
-    #     splice(@values95, 0, $chopCount);
-    #     splice(@values95, -$chopCount);
-    #     printStats(\@values95);
-    # }
+    print($json->encode($stats));
 }
 
 sub collectValues {
-    my ($obj, $values, $key) = @_;
+    state $count = 0;
+    STDERR->autoflush(1);
+    my ($obj, $values, $key, $notRoot) = @_;
     $values //= {};
     $key //= '<root>';
     if (ref $obj eq '') {
         if ($obj =~ m{^$RE{num}{real}$}o) {
             push(@{$values->{$key}}, $obj);
+            $count += 1;
+            printf STDERR ("  %d\r", $count) if -t 2 && ($count % 73 == 0);
         }
     }
     if (ref $obj eq 'ARRAY') {
         foreach my $o (@$obj) {
-            collectValues($o, $values, $key);
+            collectValues($o, $values, $key, 1);
         }
     }
     if (ref $obj eq 'HASH') {
         foreach my $k (keys %$obj) {
             if (ref $obj->{$k} eq 'HASH') {
                 my $valuess = $values->{'{}'} //= {};
-                collectValues($obj->{$k}, $valuess->{$k} //= {}, $k);
+                collectValues($obj->{$k}, $valuess->{$k} //= {}, $k, 1);
             } else {
-                collectValues($obj->{$k}, $values, $k);
+                collectValues($obj->{$k}, $values, $k, 1);
             }
         }
+    }
+    if (!$notRoot) {
+        printf STDERR ("  %d values collected\n", $count) if -t 2;
     }
     return $values;
 }
 
 sub collectStats {
-    my ($obj, $values, $key) = @_;
+    state $count = 0;
+    STDERR->autoflush(1);
+    my ($obj, $values, $key, $notRoot) = @_;
     $values //= {};
     $key //= '<root>';
     if (ref $obj eq 'ARRAY') {
         my $stats = getStats($obj);
         $values->{$key} = $stats if defined $stats;
+
+        $count += scalar @$obj;
+        printf STDERR ("  %d\r", $count) if -t 2;
     }
     if (ref $obj eq 'HASH') {
         foreach my $k (keys %$obj) {
@@ -133,11 +129,14 @@ sub collectStats {
                     delete $obj->{$k};
                     next;
                 }
-                collectStats($obj->{$k}, $values->{$k} //= {}, $k);
+                collectStats($obj->{$k}, $values->{$k} //= {}, $k, 1);
             } else {
-                collectStats($obj->{$k}, $values, $k);
+                collectStats($obj->{$k}, $values, $k, 1);
             }
         }
+    }
+    if (!$notRoot) {
+        printf STDERR ("  %d values statisticalized\n", $count) if -t 2;
     }
     return $values;
 }
@@ -182,6 +181,3 @@ sub getStats {
     splice(@values95, -$chopCount);
     $stats->{'95%'} = getStats(\@values95, 1);
 }
-
-# sub printStats {
-# }
