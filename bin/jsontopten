@@ -33,7 +33,7 @@ sub counts {
         } else {
             $counts->{0} += 1;
         }
-    } elsif (ref $object eq '') {
+    } elsif (ref $object eq '' && defined $object) {
         $counts->{$object} += 1;
     } elsif (ref $object eq 'ARRAY') {
         foreach my $o (@$object) {
@@ -65,6 +65,7 @@ sub topten {
         my @counts = map {
             [ $_, $counts->{$_} ]
         } @keys;
+        @counts = sort { $b->[1] <=> $a->[1] } @counts;
         splice(@counts, 10);
         $topten->{TOPTEN} = [@counts] if scalar @counts;
         foreach my $key (@keys) {
