@@ -83,5 +83,5 @@ sub count {
 
 sub printCounts {
     my ($counts) = @_;
-    print(Dumper($counts));
+    print($json->encode($counts));
 }
