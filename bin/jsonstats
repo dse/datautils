@@ -14,7 +14,7 @@ my $optColor = '';              # same as 'auto'
 use Getopt::Long;
 Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
 Getopt::Long::GetOptions(
-    'c|color:s' => \$optColor,
+    'color:s' => \$optColor,
     'f|fields@' => \@optFields,
 ) or die("You can't type '$PROGNAME --help' for help.\n");
 

@@ -1,16 +1,31 @@
 #!/usr/bin/env perl
 use warnings;
 use strict;
+use File::Basename qw(basename);
+our $PROGNAME = basename($0);
 use open OUT => ':locale';
 use feature 'say';
 
-use JSON;
-
-my $json = JSON->new()->pretty(1)->canonical(1)->ascii(1);
+my $optFormat = 'json';
+my $optType = 1;
+use Getopt::Long;
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    'c|csv'  => sub { $optFormat = 'csv'; },
+    't|text' => sub { $optFormat = 'text'; },
+    'j|json' => sub { $optFormat = 'json'; },
+    't|type=i' => \$optType,
+) or die("You can't type '$PROGNAME --help' for help.\n");
 
 if (scalar @ARGV < 2) {
     die("not enough arguments\n");
 }
+
+use POSIX qw(round);
+use Text::CSV_XS;
+use JSON;
+
+my $json = JSON->new()->pretty(1)->canonical(1)->ascii(1);
 
 my @obj;
 
@@ -27,7 +42,10 @@ foreach my $arg (@ARGV) {
 }
 warn(sprintf("comparing %d files\n", scalar(@obj)));
 
-compare(\@obj);
+my $result = compare(\@obj);
+if ($optFormat eq 'json') {
+    print($json->encode($result));
+}
 
 sub get {
     my ($filename) = @_;
@@ -40,10 +58,16 @@ sub get {
 }
 
 sub compare {
-    my ($objs, $level, $path) = @_;
+    my ($objs, $level, $path, $result) = @_;
     my @obj = @$objs;
     $level //= 0;
-    $path //= '';
+    $path //= [];
+
+    if ($optType == 1) {
+        $result //= [];
+    } elsif ($optType == 2 || $optType == 3 || $optType == 4) {
+        $result //= {};
+    }
 
     my %k;
     foreach my $obj (@obj) {
@@ -57,41 +81,105 @@ sub compare {
     my @k = keys %k;
     foreach my $k (@k) {
         my @o = map { ($_ && ref $_ eq 'HASH') ? $_->{$k} : undef } @obj;
-        my $path2 = $k;
-        if ($path ne '') {
-            $path2 = "$path -> $k";
-        }
-        print($path2);
-        print("\n");
-        compare([@o], $level + 1, $path2);
+        my $path2 = [@$path, $k];
+        compare([@o], $level + 1, $path2, $result);
     }
 
     my @topten = map { ($_ && ref $_ eq 'HASH') ? $_->{TOPTEN} : undef } @obj;
-    if (grep { defined $_ } @topten) {
-        my %k2;
-        my @hash = map { {} } @obj;
+    if (!grep { defined $_ } @topten) {
+        return $result;
+    }
+
+    my %k2;
+    my @hash = map { {} } @obj;
+    for (my $i = 0; $i <= $#obj; $i += 1) {
+        my $topten = $topten[$i];
+        next if !$topten;
+        foreach my $keyCount (@$topten) {
+            my ($key, $count) = @$keyCount;
+            $k2{$key} = 1;
+            $hash[$i]{$key} = $count;
+        }
+    }
+
+    my $thing1 = { path => $path, values => [] };
+    my $thing23 = [];
+    my $thing4 = {};
+
+    if ($optFormat eq 'csv') {
+        csvOut(join('/', @$path));
+    } elsif ($optFormat eq 'text') {
+        print(join(' => ', @$path), "\n");
+    }
+
+    if ($optType == 2 || $optType == 3) {
+        my $pathStr = join('/', @$path);
+        $result->{$pathStr} = $thing23;
+    } elsif ($optType == 4) {
+        my $pathStr = join('/', @$path);
+        $result->{$pathStr} = $thing4;
+    }
+
+    foreach my $key (sort keys %k2) {
+        my @values;
         for (my $i = 0; $i <= $#obj; $i += 1) {
-            my $topten = $topten[$i];
-            next if !$topten;
-            foreach my $keyCount (@$topten) {
-                my ($key, $count) = @$keyCount;
-                $k2{$key} = 1;
-                $hash[$i]{$key} = $count;
+            if ($topten[$i] && defined $hash[$i]{$key}) {
+                push(@values, $hash[$i]{$key});
+            } else {
+                push(@values, undef);
             }
         }
-        foreach my $key (sort keys %k2) {
 
-            my $column = sprintf('    %-64s', $key);
-            $column =~ s{(?:\s{2})+$}{' .' x (length($&)/2)}e;
-            print($column);
-            for (my $i = 0; $i <= $#obj; $i += 1) {
-                if ($topten[$i] && defined $hash[$i]{$key}) {
-                    printf("| %6d", $hash[$i]{$key});
+        if ($optType == 1) {
+            push(@{$thing1->{values}}, {
+                value => $key,
+                stats => \@values,
+            });
+            push(@$result, $thing1);
+        } elsif ($optType == 2) {
+            push(@$thing23, {
+                value => $key, stats => \@values,
+            });
+        } elsif ($optType == 3) {
+            push(@$thing23, [$key, @values]);
+        } elsif ($optType == 4) {
+            $thing4->{$key} = \@values;
+        }
+
+        if ($optFormat eq 'csv') {
+            csvOut('', ("" . $key), @values);
+        } elsif ($optFormat eq 'text') {
+            my $column = '    ' . $key;
+            $column .= ' ' if length($column) % 2 == 1;
+            $column .= ' .' x (31 - round(length($column) / 2));
+            foreach my $value (@values) {
+                if (defined $value) {
+                    $column .= sprintf('  %6d', $value);
                 } else {
-                    print("|       ");
+                    $column .= '        ';
                 }
             }
-            print("\n");
+            print("$column\n");
         }
+    }
+
+    return $result;
+}
+
+
+our $csv;
+
+sub csvOut {
+    my (@data) = @_;
+    if (!$csv) {
+        $csv = Text::CSV_XS->new({
+            auto_diag => 1,
+            binary => 1,
+        });
+    }
+    if (scalar @data == 1 && ref $data[0] eq 'ARRAY') {
+        $csv->say(\*STDOUT, $data[0]);
+    } else {
+        $csv->say(\*STDOUT, \@data);
     }
 }
