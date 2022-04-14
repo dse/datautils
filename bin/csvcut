@@ -1,0 +1,62 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use open OUT => ':locale';
+
+use Text::CSV_XS;
+use Getopt::Long;
+use List::Util qw(all none);
+
+use constant ETSEQ => 1;
+use constant NAMED => 2;
+
+my @fieldSpecs;
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    'f|fields=s' => \@fieldSpecs,
+) or die;
+
+my %header;
+my $row;
+
+@fieldSpecs = map { split(/\s*,\s*|\s+/) } @fieldSpecs;
+@fieldSpecs = map {
+    (m{^\d+$}         ? ($_ - 1)               :
+     m{^(\d+)-(\d+)$} ? (($1 - 1) .. ($2 - 1)) :
+     m{^-(\d+)$}      ? (1 .. ($1 - 1))        :
+     m{^(\d+)-$}      ? [ETSEQ, ($1 - 1)]      : [NAMED, $_])
+} @fieldSpecs;
+my $hasEtSeq = any { ref $_ eq 'ARRAY' && $_->[0] == ETSEQ } @fieldSpecs;
+my $hasNamed = any { ref $_ eq 'ARRAY' && $_->[0] == NAMED } @fieldSpecs;
+my @fieldNumbers;
+@fieldNumbers = @fieldSpecs if none { ref $_ eq 'ARRAY' } @fieldSpecs;
+
+my $csv = Text::CSV_XS->new({ auto_diag => 1, binary => 1 });
+
+my $lastARGV;
+while ($row = $csv->getline(\*ARGV)) {
+    if (!@fieldSpecs) {
+        $csv->say($row);
+    }
+    if (!defined $lastARGV || $ARGV ne $lastARGV) {
+        # NOTE: files that are empty or have empty first lines will
+        # not have their filenames printed.
+        $lastARGV = $ARGV;
+        if ($hasNamed) {
+            %header = map { ($row->[$_] => $_) } (0 .. $#$row); # e.g., (firstname => 0, lastname => 1, ...)
+            @fieldNumbers =
+              grep { defined $_ }
+              map { (ref $_ eq 'ARRAY' && $_->[0] == NAMED)
+                    ? $header{$_->[1]} : $_ } @fieldSpecs;
+        }
+    }
+    if ($hasEtSeq) {
+        my @fieldNumbers2 =
+          grep { defined $_ }
+          map { (ref $_ eq 'ARRAY' && $_->[0] == ETSEQ)
+                ? (($_->[1] <= $#$row) ? ($_->[1] .. $#$row) : ()) : $_ } @fieldNumbers;
+        $csv->say([ map { $row->[$_] } @fieldNumbers2 ]);
+    } else {
+        $csv->say([ map { $row->[$_] } @fieldNumbers ]);
+    }
+}
