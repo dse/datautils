@@ -10,19 +10,27 @@ use strict;
 use Getopt::Long;
 use JSON::XS;
 use YAML::XS;
+use List::Util qw(max sum);
 
 our $recurse;
 our $brackets;
 our $noArrayIndices;
 our $noValues;
+our $align;
 
 Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
 Getopt::Long::GetOptions(
-    'r|recurse' => \$recurse,
+    'r|recurse'  => \$recurse,
     'b|brackets' => \$brackets,
-    'I|no-array-indices' => \$noArrayIndices,
+    'I|n|no-array-indices|no-numeric' => \$noArrayIndices,
     'V|no-values' => \$noValues,
+    'a|align:f'  => \$align,
 ) or die(":-(\n");
+
+# for when -a/--align is specified without its optional argument
+if (defined $align && $align == 0) {
+    $align = 95;
+}
 
 my $json = JSON::XS->new();
 my $exit = 0;
@@ -30,23 +38,27 @@ my $exit = 0;
 local $/ = undef;
 while (<>) {
     my $o = eval { $json->decode($_); };
-    if (!$@) {
-        grin($o);
-        next;
+    if ($@) {
+        $o = eval { YAML::XS::Load($_); };
+        if ($@) {
+            warn(sprintf("%s: input is neither JSON nor YAML\n"));
+            $exit = 1;
+            next;
+        }
     }
-    $o = eval { YAML::XS::Load($_); };
-    if (!$@) {
+    if ($align) {
+        my $width = computeColumnSize($o, $align);
+        printf("%s\n", $width);
+        grin($o, undef, $width);
+    } else {
         grin($o);
-        next;
     }
-    warn(sprintf("%s: input is neither JSON nor YAML\n"));
-    $exit = 1;
 }
 
 exit($exit);
 
 sub grin {
-    my ($o, $lvalue) = @_;
+    my ($o, $lvalue, $sub) = @_;
     $lvalue //= 'json';
     if (ref $o eq 'ARRAY') {
         for (my $i = 0; $i < scalar @$o; $i += 1) {
@@ -61,22 +73,37 @@ sub grin {
     if (ref $o eq 'HASH') {
         my @keys = sort keys %$o;
         foreach my $key (@keys) {
-            grin($o->{$key}, $lvalue . suffix($key));
+            grin($o->{$key}, $lvalue . suffix($key), $sub);
         }
         return;
     }
     if ($recurse && defined $o && looksLikeJson($o)) {
         my $oo = eval { $json->decode($o); };
         if ($oo && !$@) {
-            grin($oo, $lvalue);
+            grin($oo, $lvalue, $sub);
             return;
         }
     }
     if ($noValues) {
         printf("%s\n", $lvalue);
+    } elsif (ref $sub eq 'CODE') {
+        $sub->($lvalue);
+    } elsif ($sub) {
+        printf("%-*s = %s;\n", $sub, $lvalue, $json->encode($o));
     } else {
         printf("%s = %s;\n", $lvalue, $json->encode($o));
     }
+}
+
+sub computeColumnSize {
+    my ($o, $pct) = @_;
+    my $lengths = {};
+    my $sub = sub {
+        my ($lvalue) = @_;
+        $lengths->{length($lvalue)} += 1;
+    };
+    grin($o, undef, $sub);
+    return ninetyFivePercent($lengths, $pct);
 }
 
 sub isIdentifier {
@@ -95,4 +122,16 @@ sub looksLikeJson {
     return 1 if substr($string, 0, 1) eq '[' && substr($string, -1, 1) eq ']';
     return 1 if substr($string, 0, 1) eq '{' && substr($string, -1, 1) eq '}';
     return;
+}
+
+sub ninetyFivePercent {
+    my ($lengths, $pct) = @_;
+    my $total = sum values %$lengths;
+    my $accum = 0;
+    foreach my $key (sort { $b <=> $a } keys %$lengths) {
+        $accum += $lengths->{$key};
+        if ($accum * 100 > $total * (100 - $pct)) {
+            return $key;
+        }
+    }
 }

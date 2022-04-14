@@ -1,0 +1,183 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use feature qw(state);
+use File::Basename qw(basename);
+our $PROGNAME = basename($0);
+
+use IO::Handle;
+
+use open OUT => qw(:locale);
+
+my @optFields = ();
+my $optColor = '';              # same as 'auto'
+use Getopt::Long;
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    'color:s' => \$optColor,
+    'f|fields@' => \@optFields,
+) or die("You can't type '$PROGNAME --help' for help.\n");
+
+my @fields = map { (grep { /\S/ }
+                    split(/\s*,\s*|\s+/, $_)) } @optFields;
+
+use JSON;
+use Data::Dumper qw(Dumper);
+use Statistics::Descriptive;
+use POSIX qw(round);
+use Regexp::Common qw(number);
+use Text::Wrap qw(wrap);
+
+$Data::Dumper::Terse = 1;
+$Data::Dumper::Sortkeys = 1;
+
+my $json = JSON->new()->pretty(1)->canonical(1)->ascii(1);
+my $isMultiple = scalar @ARGV >= 2;
+
+my $GREEN = "\e[0;32m";
+my $RESET = "\e[0m";
+if ($optColor eq 'always') {
+    # do nothing
+} elsif ($optColor eq '' || $optColor eq 'auto') {
+    if (!-t 1) {
+        $GREEN = '';
+        $RESET = '';
+    }
+} elsif ($optColor eq 'never') {
+    $GREEN = '';
+    $RESET = '';
+} else {
+    die("$PROGNAME: invalid --color value: $optColor\n");
+}
+
+$/ = undef;
+while (<>) {
+    # seen in some JSON output by `mongoexport --jsonArray`.
+    s{":\+Infinity\b}{":"<<<+Infinity>>>"}g;
+    s{":\-Infinity\b}{":"<<<-Infinity>>>"}g;
+
+    warn("$PROGNAME: parsing $ARGV ...\n");
+    my $object = $json->decode($_);
+    if (ref $object ne 'ARRAY') {
+        die("$PROGNAME: $ARGV: only arrays are supported\n");
+    }
+
+    warn("$PROGNAME: counting objects in $ARGV ...\n");
+    my $values = collectValues($object);
+
+    if ($isMultiple) {
+        print("${GREEN}>>> ${ARGV} <<<${RESET}\n");
+    }
+
+    warn("$PROGNAME: collecting statistics for $ARGV ...\n");
+    my $stats = collectStats($values);
+    cleanup($stats);
+    print($json->encode($stats));
+}
+
+sub collectValues {
+    state $count = 0;
+    STDERR->autoflush(1);
+    my ($obj, $values, $key, $notRoot) = @_;
+    $values //= {};
+    $key //= '<root>';
+    if (ref $obj eq '') {
+        if ($obj =~ m{^$RE{num}{real}$}o) {
+            push(@{$values->{$key}}, $obj);
+            $count += 1;
+            printf STDERR ("  %d\r", $count) if -t 2 && ($count % 73 == 0);
+        }
+    }
+    if (ref $obj eq 'ARRAY') {
+        foreach my $o (@$obj) {
+            collectValues($o, $values, $key, 1);
+        }
+    }
+    if (ref $obj eq 'HASH') {
+        foreach my $k (keys %$obj) {
+            if (ref $obj->{$k} eq 'HASH') {
+                my $valuess = $values->{'{}'} //= {};
+                collectValues($obj->{$k}, $valuess->{$k} //= {}, $k, 1);
+            } else {
+                collectValues($obj->{$k}, $values, $k, 1);
+            }
+        }
+    }
+    if (!$notRoot) {
+        printf STDERR ("  %d values collected\n", $count) if -t 2;
+    }
+    return $values;
+}
+
+sub collectStats {
+    state $count = 0;
+    STDERR->autoflush(1);
+    my ($obj, $values, $key, $notRoot) = @_;
+    $values //= {};
+    $key //= '<root>';
+    if (ref $obj eq 'ARRAY') {
+        my $stats = getStats($obj);
+        $values->{$key} = $stats if defined $stats;
+
+        $count += scalar @$obj;
+        printf STDERR ("  %d\r", $count) if -t 2;
+    }
+    if (ref $obj eq 'HASH') {
+        foreach my $k (keys %$obj) {
+            if (ref $obj->{$k} eq 'HASH') {
+                if (!scalar keys %{$obj->{$k}}) {
+                    delete $obj->{$k};
+                    next;
+                }
+                collectStats($obj->{$k}, $values->{$k} //= {}, $k, 1);
+            } else {
+                collectStats($obj->{$k}, $values, $k, 1);
+            }
+        }
+    }
+    if (!$notRoot) {
+        printf STDERR ("  %d values statisticalized\n", $count) if -t 2;
+    }
+    return $values;
+}
+
+sub cleanup {
+    my ($obj) = @_;
+    if (ref $obj eq 'HASH') {
+        foreach my $k (keys %$obj) {
+            if (ref $obj->{$k} eq 'HASH') {
+                cleanup($obj->{$k});
+                delete $obj->{$k} if !scalar keys %{$obj->{$k}};
+            }
+        }
+    }
+}
+
+sub getStats {
+    my ($values, $no95) = @_;
+    return if scalar @$values < 10;
+
+    my $chopFrac = (1 - 95/100) / 2;
+    my $chopCount = round(scalar @$values * $chopFrac);
+
+    my $stat = Statistics::Descriptive::Full->new();
+    $stat->add_data(@$values);
+
+    my $stats = {
+        count              => $stat->count(),
+        mean               => $stat->mean(),
+        median             => $stat->median(),
+        mode               => $stat->mode(),
+        standard_deviation => $stat->standard_deviation(),
+        variance           => $stat->variance(),
+        min                => $stat->min(),
+        max                => $stat->max(),
+    };
+
+    return $stats if $chopCount < 5 || $no95;
+
+    my @values95 = @$values;
+    splice(@values95, 0, $chopCount);
+    splice(@values95, -$chopCount);
+    $stats->{'95%'} = getStats(\@values95, 1);
+}

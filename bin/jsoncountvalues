@@ -1,0 +1,98 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use File::Basename qw(basename);
+our $PROGNAME = basename($0);
+
+use open OUT => qw(:locale);
+
+my $optSort;
+my $optColor = '';              # same as 'auto'
+my @optExcludeFields;
+my @optFields;
+use Getopt::Long;
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    's|sort' => \$optSort,
+    'c|color:s' => \$optColor,
+    'x|exclude-fields=s' => \@optExcludeFields,
+    'f|fields=s' => \@optFields,
+) or die("You can't type '$PROGNAME --help' for help.\n");
+
+@optExcludeFields = grep { /\S/ } map { split(/\s*,\s*|\s+/, $_) } @optExcludeFields;
+my %optExcludeFields = map { ($_ => 1) } @optExcludeFields;
+print("@optExcludeFields\n");
+
+@optFields = grep { /\S/ } map { split(/\s*,\s*|\s+/, $_) } @optFields;
+my %optFields = map { ($_ => 1) } @optFields;
+print("@optFields\n");
+
+use JSON;
+use Data::Dumper qw(Dumper);
+
+my $json = JSON->new()->pretty(1)->canonical(1)->ascii(1);
+my $isMultiple = scalar @ARGV >= 2;
+
+my $GREEN = "\e[0;32m";
+my $RESET = "\e[0m";
+if ($optColor eq 'always') {
+    # do nothing
+} elsif ($optColor eq '' || $optColor eq 'auto') {
+    if (!-t 1) {
+        $GREEN = '';
+        $RESET = '';
+    }
+} elsif ($optColor eq 'never') {
+    $GREEN = '';
+    $RESET = '';
+} else {
+    die("$PROGNAME: invalid --color value: $optColor\n");
+}
+
+$/ = undef;
+while (<>) {
+    # seen in some JSON output by `mongoexport --jsonArray`.
+    s{":\+Infinity\b}{":"<<<+Infinity>>>"}g;
+    s{":\-Infinity\b}{":"<<<-Infinity>>>"}g;
+
+    warn("$PROGNAME: parsing $ARGV ...\n");
+    my $object = $json->decode($_);
+
+    warn("$PROGNAME: counting objects in $ARGV ...\n");
+    my $counts = {};
+    count($object, $counts);
+
+    if ($isMultiple) {
+        print("${GREEN}>>> ${ARGV} <<<${RESET}\n");
+    }
+    printCounts($counts);
+}
+
+sub count {
+    my ($obj, $counts, $include) = @_;
+    $counts //= {};
+    if (ref $obj eq '') {
+        if (scalar @optFields) {
+            $counts->{$obj} += 1 if $optFields{$obj};
+        } else {
+            $counts->{$obj} += 1 if !$optExcludeFields{$obj};
+        }
+    }
+    if (ref $obj eq 'ARRAY') {
+        foreach my $o (@$obj) {
+            count($o, $counts);
+        }
+    }
+    if (ref $obj eq 'HASH') {
+        foreach my $k (keys %$obj) {
+            $counts->{$k} //= {};
+            count($obj->{$k}, $counts->{$k});
+        }
+    }
+    return $counts;
+}
+
+sub printCounts {
+    my ($counts) = @_;
+    print($json->encode($counts));
+}

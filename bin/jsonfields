@@ -1,0 +1,60 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use feature qw(state);
+use File::Basename qw(basename);
+our $PROGNAME = basename($0);
+
+use IO::Handle;
+
+use open OUT => qw(:locale);
+
+my $optCount = 0;
+use Getopt::Long;
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    'c|count' => \$optCount,
+) or die("You can't type '$PROGNAME --help' for help.\n");
+
+use JSON;
+
+my $json = JSON->new()->pretty(1)->canonical(1)->ascii(1);
+my $isMultiple = scalar @ARGV >= 2;
+
+my $GREEN = "\e[0;32m";
+my $RESET = "\e[0m";
+if (!-t 1) {
+    $GREEN = '';
+    $RESET = '';
+}
+
+$/ = undef;
+while (<>) {
+    # seen in some JSON output by `mongoexport --jsonArray`.
+    s{":\+Infinity\b}{":"<<<+Infinity>>>"}g;
+    s{":\-Infinity\b}{":"<<<-Infinity>>>"}g;
+
+    my $object = $json->decode($_);
+    if (ref $object ne 'ARRAY') {
+        die("$PROGNAME: $ARGV: only arrays are supported\n");
+    }
+
+    my %k;
+    foreach my $item (@$object) {
+        next unless ref $item eq 'HASH';
+        foreach my $key (keys %$item) {
+            $k{$key} += 1;
+        }
+    }
+
+    if ($isMultiple) {
+        print("${GREEN}>>> ${ARGV} <<<${RESET}\n");
+    }
+    foreach my $k (sort keys %k) {
+        if ($optCount) {
+            printf("%6d  %s\n", $k{$k}, $k);
+        } else {
+            print("$k\n");
+        }
+    }
+}
