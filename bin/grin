@@ -13,11 +13,15 @@ use YAML::XS;
 
 our $recurse;
 our $brackets;
+our $noArrayIndices;
+our $noValues;
 
 Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
 Getopt::Long::GetOptions(
     'r|recurse' => \$recurse,
     'b|brackets' => \$brackets,
+    'I|no-array-indices' => \$noArrayIndices,
+    'V|no-values' => \$noValues,
 ) or die(":-(\n");
 
 my $json = JSON::XS->new();
@@ -46,7 +50,11 @@ sub grin {
     $lvalue //= 'json';
     if (ref $o eq 'ARRAY') {
         for (my $i = 0; $i < scalar @$o; $i += 1) {
-            grin($o->[$i], $lvalue . '[' . $i . ']');
+            if ($noArrayIndices) {
+                grin($o->[$i], $lvalue . '[#]');
+            } else {
+                grin($o->[$i], $lvalue . '[' . $i . ']');
+            }
         }
         return;
     }
@@ -64,7 +72,11 @@ sub grin {
             return;
         }
     }
-    printf("%s = %s;\n", $lvalue, $json->encode($o));
+    if ($noValues) {
+        printf("%s\n", $lvalue);
+    } else {
+        printf("%s = %s;\n", $lvalue, $json->encode($o));
+    }
 }
 
 sub isIdentifier {
