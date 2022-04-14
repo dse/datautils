@@ -41,7 +41,7 @@ while (<>) {
     if ($@) {
         $o = eval { YAML::XS::Load($_); };
         if ($@) {
-            warn(sprintf("%s: input is neither JSON nor YAML\n"));
+            warn(sprintf("grin: input is neither JSON nor YAML\n"));
             $exit = 1;
             next;
         }
