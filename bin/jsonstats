@@ -80,6 +80,7 @@ sub collectValues {
     state $count = 0;
     STDERR->autoflush(1);
     my ($obj, $values, $key, $notRoot) = @_;
+    return if !defined $obj;
     $values //= {};
     $key //= '<root>';
     if (ref $obj eq '') {

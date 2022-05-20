@@ -1,7 +1,19 @@
 #!/usr/bin/env perl
 use warnings;
 use strict;
+
+use File::Basename qw(basename);
+our $PROGNAME = basename($0);
+
 use open OUT => ':locale';
+
+my $optFormat = 'json';
+use Getopt::Long;
+Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    't|text' => sub { $optFormat = 'text'; },
+    'j|json' => sub { $optFormat = 'json'; },
+) or die("You can't type '$PROGNAME --help' for help.\n");
 
 use JSON;
 use List::Util qw(all max);
@@ -43,7 +55,13 @@ if (scalar @object < 2) {
 }
 
 my $cmp = compare(@object);
-print($json->encode($cmp));
+if ($optFormat eq 'json') {
+    warn("outputting json");
+    print($json->encode($cmp));
+} else {
+    warn("outputting text");
+    printText($cmp);
+}
 
 sub compare {
     my (@obj) = @_;
@@ -85,4 +103,31 @@ sub compare {
         return [ @obj ];
     }
     return;
+}
+
+sub printText {
+    my ($obj, $indent) = @_;
+    $indent //= '';
+    if (ref $obj eq 'HASH') {
+        foreach my $key (sort keys %$obj) {
+            my $value = $obj->{$key};
+            if (ref $value eq 'ARRAY') {
+                printf('%-51s', $indent.$key);
+                printf('  %12s', printFloat($value->[0]));
+                printf('  %12s', printFloat($value->[1]));
+                print("\n");
+            } elsif (ref $value eq 'HASH') {
+                print("$indent$key\n");
+                printText($value, $indent . '    ');
+            }
+        }
+    }
+}
+
+sub printFloat {
+    my ($float) = @_;
+    if (!defined $float) {
+        return('            ');
+    }
+    return sprintf('%12g', $float);
 }
